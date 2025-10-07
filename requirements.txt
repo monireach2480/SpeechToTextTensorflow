@@ -1,0 +1,7 @@
+-e .from_root
+flask
+numpy
+tensorflow
+protobuf
+
+-e .
