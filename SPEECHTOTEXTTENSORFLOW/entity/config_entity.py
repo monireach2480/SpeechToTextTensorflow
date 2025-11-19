@@ -1,5 +1,5 @@
 import os
-from STT.constants import *
+from SPEECHTOTEXTTENSORFLOW.constants import *
 
 from datetime import datetime
 from dataclasses import dataclass
