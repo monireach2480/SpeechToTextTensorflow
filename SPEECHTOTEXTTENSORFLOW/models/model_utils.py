@@ -5,8 +5,8 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-from STT.exceptions import STTException
-from STT.logger import logging
+from SPEECHTOTEXTTENSORFLOW.exceptions import STTException
+from SPEECHTOTEXTTENSORFLOW.logger import logging
 
 
 class TokenEmbedding(layers.Layer):
