@@ -42,11 +42,22 @@ def get_data(wavs, id_to_text, maxlen=50):
     try:
         logging.info("Entered get_data function of data utils")
         data = []
-        # print(f"Maximum length of characters: {maxlen}")
         for w in wavs:
-            id = w.split("/")[-1].split(".")[0]
-            if len(id_to_text[id]) < maxlen:
+            # Use os.path to handle both Windows and Linux paths
+            filename = os.path.basename(w)  # Get just the filename
+            id = filename.split(".")[0]     # Remove the .wav extension
+            
+            # Debug print to see what's happening
+            print(f"Processing file: {w}")
+            print(f"Extracted ID: {id}")
+            print(f"Available keys: {list(id_to_text.keys())[:5]}")  # Show first 5 keys
+            
+            if id in id_to_text and len(id_to_text[id]) < maxlen:
                 data.append({"audio": w, "text": id_to_text[id]})
+            elif id not in id_to_text:
+                print(f"Warning: ID '{id}' not found in metadata")
+                
+        logging.info(f"Successfully processed {len(data)} audio files")
         logging.info("Exited get_data function of model utils")
         return data
     except Exception as e:
