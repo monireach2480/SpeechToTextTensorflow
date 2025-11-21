@@ -5,9 +5,9 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-from STT.models.model_utils import TokenEmbedding, SpeechFeatureEmbedding, TransformerEncoder, TransformerDecoder
-from STT.logger import logging
-from STT.exceptions import STTException
+from SPEECHTOTEXTTENSORFLOW.models.model_utils import TokenEmbedding, SpeechFeatureEmbedding, TransformerEncoder, TransformerDecoder
+from SPEECHTOTEXTTENSORFLOW.logger import logging
+from SPEECHTOTEXTTENSORFLOW.exceptions import STTException
 
 
 
