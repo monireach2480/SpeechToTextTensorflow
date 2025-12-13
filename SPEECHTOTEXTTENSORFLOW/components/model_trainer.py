@@ -1,3 +1,5 @@
+# SPEECHTOTEXTTENSORFLOW/components/model_trainer.py
+
 import os
 import sys
 import csv
@@ -11,62 +13,84 @@ from SPEECHTOTEXTTENSORFLOW.entity.artifact_entity import DataPreprocessingArtif
 from SPEECHTOTEXTTENSORFLOW.entity.config_entity import ModelTrainerConfig
 from SPEECHTOTEXTTENSORFLOW.entity.model_entity import CreateTensors
 from SPEECHTOTEXTTENSORFLOW.models.data_utils import VectorizeChar
-from SPEECHTOTEXTTENSORFLOW.constants import *
 from SPEECHTOTEXTTENSORFLOW.models.model import Transformer
 from SPEECHTOTEXTTENSORFLOW.models.model_utils import CustomSchedule, DisplayOutputs
 
-class ModelTrainer():
+# Safe constants
+try:
+    from SPEECHTOTEXTTENSORFLOW.constants import *
+except:
+    pass
 
-    def __init__(self, data_preprocessing_artifacats: DataPreprocessingArtifacts, model_trainer_config = ModelTrainerConfig) -> None:
+BATCH_SIZE = globals().get('BATCH_SIZE', 32)
+VAL_BATCH_SIZE = globals().get('VAL_BATCH_SIZE', 8)
+EPOCHS = globals().get('EPOCHS', 30)
+MAX_TARGET_LENGTH = globals().get('MAX_TARGET_LENGTH', 200)
+NUM_CLASSES = globals().get('NUM_CLASSES', 34)
+START_TOKEN_IDX = globals().get('START_TOKEN_IDX', 2)
+END_TOKEN_IDX = globals().get('END_TOKEN_IDX', 3)
+SAVED_MODEL_DIR = globals().get('SAVED_MODEL_DIR', "saved_model")
 
-        try:
-            self.data_preprocessing_artifacats = data_preprocessing_artifacats
-            self.model_trainer_config = model_trainer_config
 
-        except Exception as e:
-            raise STTException(e, sys)
+class ModelTrainer:
+    def __init__(self, data_preprocessing_artifacts: DataPreprocessingArtifacts, model_trainer_config: ModelTrainerConfig):
+        self.data_preprocessing_artifacts = data_preprocessing_artifacts
+        self.model_trainer_config = model_trainer_config
 
-    def vectorizer(self) -> VectorizeChar:
-        try:
-            logging.info("vectorising the data")
-            self.vectorizer = VectorizeChar(MAX_TARGET_LENGTH)
-            return self.vectorizer
-        except Exception as e:
-            raise STTException(e, sys)
+    def vectorizer(self):
+        logging.info("Creating vectorizer")
+        self.vectorizer = VectorizeChar(MAX_TARGET_LENGTH)
 
     def get_data(self):
-        train_data = self.data_preprocessing_artifacats.train_data_path
-        test_data = self.data_preprocessing_artifacats.test_data_path
-        try:
-            with open(train_data) as f:
-                self.dt_train = [{k: v for k, v in row.items()}
-                    for row in csv.DictReader(f, skipinitialspace=True)]
+        train_path = self.data_preprocessing_artifacts.train_data_path
+        test_path = self.data_preprocessing_artifacts.test_data_path
 
-            with open(test_data) as f:
-                self.dt_test = [{k: v for k, v in row.items()}
-                    for row in csv.DictReader(f, skipinitialspace=True)]
+        try:
+            def read_ljspeech_csv(path):
+                data = []
+                base_dir = os.path.dirname(path)
+                with open(path, encoding="cp1252") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        parts = line.split("|", 2)  # split only on first two |
+                        if len(parts) < 3:
+                            continue
+                        wav_path = os.path.join(base_dir, parts[1])
+                        text = parts[2].strip().lower()
+                        data.append({"audio": wav_path, "text": text})
+                return data
+
+            self.dt_train = read_ljspeech_csv(train_path)
+            self.dt_test = read_ljspeech_csv(test_path)
+
+            logging.info(f"Loaded {len(self.dt_train)} train, {len(self.dt_test)} val samples")
 
         except Exception as e:
             raise STTException(e, sys)
-    
+
     def get_tensors(self):
         try:
-
-            self.ds = CreateTensors(data=self.dt_train, vectorizer=self.vectorizer).create_tf_dataset(bs=16)
-            self.val_ds = CreateTensors(data=self.dt_test, vectorizer=self.vectorizer).create_tf_dataset(bs=4)
+            self.ds = CreateTensors(data=self.dt_train, vectorizer=self.vectorizer)\
+                      .create_tf_dataset(bs=BATCH_SIZE)
+            self.val_ds = CreateTensors(data=self.dt_test, vectorizer=self.vectorizer)\
+                        .create_tf_dataset(bs=VAL_BATCH_SIZE)
         except Exception as e:
             raise STTException(e, sys)
 
     def fit(self):
         try:
-            logging.info('fit the model')
+            logging.info("Starting training...")
             batch = next(iter(self.val_ds))
-
-            # The vocabulary to convert predicted indices into characters
             idx_to_char = self.vectorizer.get_vocabulary()
+
             display_cb = DisplayOutputs(
-                batch, idx_to_char, target_start_token_idx=2, target_end_token_idx=3
+                batch, idx_to_char,
+                target_start_token_idx=START_TOKEN_IDX,
+                target_end_token_idx=END_TOKEN_IDX
             )
+
             self.model = Transformer(
                 num_hid=200,
                 num_head=2,
@@ -74,49 +98,54 @@ class ModelTrainer():
                 target_maxlen=MAX_TARGET_LENGTH,
                 num_layers_enc=4,
                 num_layers_dec=1,
-                num_classes=34,
-            )
-            loss_fn = tf.keras.losses.CategoricalCrossentropy(
-                from_logits=True, label_smoothing=0.1,
+                num_classes=NUM_CLASSES,
             )
 
-            learning_rate = CustomSchedule(
+            loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=True, label_smoothing=0.1)
+            lr = CustomSchedule(
                 init_lr=0.00001,
                 lr_after_warmup=0.001,
                 final_lr=0.00001,
-                warmup_epochs=15,
-                decay_epochs=40,
+                warmup_epochs=10,
+                decay_epochs=85,
                 steps_per_epoch=len(self.ds),
             )
-            optimizer = keras.optimizers.Adam(learning_rate)
+            optimizer = keras.optimizers.Adam(lr)
+
             self.model.compile(optimizer=optimizer, loss=loss_fn)
 
-            self.model.fit(self.ds, validation_data=self.val_ds, callbacks=[display_cb], epochs=EPOCHS)       
+            history = self.model.fit(
+                self.ds,
+                validation_data=self.val_ds,
+                callbacks=[display_cb],
+                epochs=EPOCHS,
+                verbose=1
+            )
+
+            self.final_val_loss = history.history['val_loss'][-1]
 
         except Exception as e:
             raise STTException(e, sys)
-    
 
-    def initiate_model_trainer(self) -> None:
+    def initiate_model_trainer(self) -> ModelTrainerArtifacts:
         try:
+            logging.info("STARTING TRAINING PIPELINE")
             self.vectorizer()
             self.get_data()
             self.get_tensors()
             self.fit()
 
-            model_loss = self.model.val_loss.numpy()
-            
-            os.makedirs(self.model_trainer_config.model_dir_path, exist_ok=True)
-            weights_path = os.path.join(self.model_trainer_config.model_dir_path, SAVED_MODEL_DIR)
-            os.makedirs(weights_path, exist_ok=True)
-            self.model.save_weights(weights_path)
+            save_dir = os.path.join(self.model_trainer.model_dir_path, SAVED_MODEL_DIR)
+            os.makedirs(save_dir, exist_ok=True)
+            self.model.save_weights(save_dir)
 
-            model_trianer_artifact = ModelTrainerArtifacts(
-                model_path=weights_path,
-                model_loss=model_loss
+            artifact = ModelTrainerArtifacts(
+                model_path=save_dir,
+                model_loss=self.final_val_loss
             )
-            return model_trianer_artifact
+
+            logging.info(f"MODEL SAVED → {save_dir}")
+            return artifact
 
         except Exception as e:
             raise STTException(e, sys)
-            
